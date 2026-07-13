@@ -10,7 +10,9 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
+import logging
 from pathlib import Path
+import cmdstanpy
 import io
 import streamlit as st
 import pandas as pd
@@ -148,7 +150,7 @@ def success_box(text):
 def show_chart(filename, caption=""):
     path = CHARTS_DIR / filename
     if path.exists():
-        st.image(str(path), caption=caption, use_column_width=True)
+        st.image(str(path), caption=caption, use_container_width=True)
     else:
         st.warning(f"Chart not found: `{filename}`")
 
@@ -163,7 +165,33 @@ def download_plotly_html(fig, filename, label="⬇️ Download Chart (HTML)"):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DATA LOADERS  (all @st.cache_data for performance)
+# CMDSTAN STARTUP — install once, cached as a resource
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_resource(show_spinner="Installing CmdStan (first-time only)…")
+def _ensure_cmdstan():
+    """
+    Installs CmdStan into a writable cache directory if it is not already
+    available.  On Streamlit Cloud this runs exactly once per deployment;
+    the result is held in the resource cache for the lifetime of the process.
+    Returns True on success, False on failure (caller checks the flag).
+    """
+    try:
+        import cmdstanpy
+        # Silence CmdStanPy's own logger during installation
+        logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+        # Only install if CmdStan is not already present
+        if not cmdstanpy.cmdstan_path():
+            cmdstanpy.install_cmdstan(overwrite=False, verbose=False)
+        return True
+    except Exception as exc:
+        # Non-fatal — app continues without Prophet if CmdStan unavailable
+        logging.warning(f"CmdStan installation skipped: {exc}")
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DATA LOADERS  (@st.cache_data for pure data, @st.cache_resource for models)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(show_spinner="Loading Superstore data…")
@@ -194,9 +222,82 @@ def get_region_monthly():
     df["month_start"] = df["order_date"].dt.to_period("M").dt.to_timestamp()
     return df.groupby(["month_start", "region"])["sales"].sum().reset_index().rename(columns={"month_start": "date"})
 
-@st.cache_data(show_spinner="Training Prophet model...")
-def _run_prophet(daily_df, periods=90):
-    """Fit Prophet on a ds/y DataFrame — returns the full forecast."""
+
+# ── Prophet helper utilities ────────────────────────────────────────────────────
+
+def _daily_from_trans(df_sub, df_all):
+    """Aggregate sub-DataFrame to a daily ds/y series spanning the full date range."""
+    all_dates = pd.date_range(
+        start=df_all["order_date"].min(),
+        end=df_all["order_date"].max(),
+        freq="D"
+    )
+    daily = df_sub.groupby("order_date")["sales"].sum()
+    return (
+        daily.reindex(all_dates, fill_value=0.0)
+             .reset_index()
+             .rename(columns={"index": "ds", "order_date": "ds", "sales": "y"})
+    )
+
+def _monthly_split(forecast, cutoff):
+    """Split a Prophet forecast DataFrame into historical fitted and future portions."""
+    fc = forecast.copy()
+    fc["month"] = fc["ds"].dt.to_period("M").dt.to_timestamp()
+    hist_fc = (
+        fc[fc["ds"] <= cutoff]
+        .groupby("month")[["yhat"]].sum()
+        .reset_index()
+        .rename(columns={"month": "date"})
+    )
+    fut_fc = (
+        fc[fc["ds"] > cutoff]
+        .groupby("month")[["yhat", "yhat_lower", "yhat_upper"]].sum()
+        .reset_index()
+        .rename(columns={"month": "date"})
+    )
+    for col in ["yhat_lower", "yhat_upper"]:
+        fut_fc[col] = fut_fc[col].clip(lower=0)
+    return hist_fc, fut_fc
+
+
+# ── Prophet two-stage cache pattern ────────────────────────────────────────────
+#
+# Stage 1  →  @st.cache_resource  trains the Prophet model object ONCE.
+#             The model is held in memory (not pickled) for the process lifetime.
+#             Using a string `model_key` makes the cache key lightweight & hashable.
+#
+# Stage 2  →  @st.cache_data  calls model.predict() and returns a plain DataFrame.
+#             DataFrames are safely pickle-serialised by Streamlit Cloud.
+#             The leading underscore on `_model` tells Streamlit to skip hashing
+#             that argument (Prophet objects are not hashable).
+
+@st.cache_resource(show_spinner="Training Prophet model (first-time only)…")
+def _train_prophet_model(model_key: str):
+    """
+    Train a Prophet model identified by *model_key*.
+
+    model_key must be one of:
+      "overall"          — full-dataset model
+      "cat:<category>"   — per-category model
+      "reg:<region>"     — per-region model
+
+    The Prophet object is stored in the resource cache and reused on every
+    subsequent page navigation without retraining.
+    """
+    df = get_cleaned_train()
+
+    if model_key == "overall":
+        df_sub = df
+    elif model_key.startswith("cat:"):
+        category = model_key[4:]
+        df_sub = df[df["category"] == category]
+    elif model_key.startswith("reg:"):
+        region = model_key[4:]
+        df_sub = df[df["region"] == region]
+    else:
+        raise ValueError(f"Unknown model_key: {model_key!r}")
+
+    daily = _daily_from_trans(df_sub, df)
 
     m = Prophet(
         changepoint_prior_scale=0.01,
@@ -204,73 +305,87 @@ def _run_prophet(daily_df, periods=90):
         yearly_seasonality=True,
         weekly_seasonality=True,
         daily_seasonality=False,
-        stan_backend="CMDSTANPY"
     )
+    m.fit(daily)
+    return m
 
-    m.fit(daily_df)
 
-    future = m.make_future_dataframe(
-        periods=periods,
-        freq="D"
-    )
+@st.cache_data(show_spinner=False)
+def _generate_forecast(_model, model_key: str, periods: int = 90):
+    """
+    Generate a Prophet forecast DataFrame.
 
-    return m.predict(future)
+    *_model* is excluded from hashing (leading underscore).
+    *model_key* and *periods* are the actual cache discriminators.
+    Returns the raw forecast DataFrame.
+    """
+    future = _model.make_future_dataframe(periods=periods, freq="D")
+    return _model.predict(future)
 
-def _daily_from_trans(df_sub, df_all):
-    all_dates = pd.date_range(start=df_all["order_date"].min(), end=df_all["order_date"].max(), freq="D")
-    daily = df_sub.groupby("order_date")["sales"].sum()
-    return daily.reindex(all_dates, fill_value=0.0).reset_index().rename(columns={"index": "ds", "order_date": "ds", "sales": "y"})
 
-def _monthly_split(forecast, cutoff):
-    fc = forecast.copy()
-    fc["month"] = fc["ds"].dt.to_period("M").dt.to_timestamp()
-    hist_fc = fc[fc["ds"] <= cutoff].groupby("month")[["yhat"]].sum().reset_index().rename(columns={"month": "date"})
-    fut_fc  = fc[fc["ds"]  > cutoff].groupby("month")[["yhat", "yhat_lower", "yhat_upper"]].sum().reset_index().rename(columns={"month": "date"})
-    for col in ["yhat_lower", "yhat_upper"]:
-        fut_fc[col] = fut_fc[col].clip(lower=0)
-    return hist_fc, fut_fc
+# ── High-level Prophet forecast accessors ──────────────────────────────────────
 
 @st.cache_data(show_spinner="Running overall Prophet forecast (first-time only)…")
 def get_prophet_overall():
+    """Return (hist_monthly_df, future_monthly_df) for the full dataset."""
+    model    = _train_prophet_model("overall")
+    forecast = _generate_forecast(model, "overall", periods=90)
+
     df = get_cleaned_train()
-    daily = _daily_from_trans(df, df)
-
-    st.write("Starting Prophet")   # ADD HERE
-
-    forecast = _run_prophet(daily, periods=90)
-
-    st.write("Prophet completed")  # ADD HERE
-
     cutoff = df["order_date"].max()
-    daily["month"] = daily["ds"].dt.to_period("M").dt.to_timestamp()
-    hist = daily.groupby("month")["y"].sum().reset_index().rename(columns={"month": "date", "y": "sales"})
-    _, fut = _monthly_split(forecast, cutoff)
 
+    daily = _daily_from_trans(df, df)
+    daily["month"] = daily["ds"].dt.to_period("M").dt.to_timestamp()
+    hist = (
+        daily.groupby("month")["y"].sum()
+             .reset_index()
+             .rename(columns={"month": "date", "y": "sales"})
+    )
+    _, fut = _monthly_split(forecast, cutoff)
     return hist, fut
+
 
 @st.cache_data(show_spinner="Running category forecast…")
-def get_prophet_category(category):
+def get_prophet_category(category: str):
+    """Return (hist_monthly_df, future_monthly_df) for a single category."""
+    model_key = f"cat:{category}"
+    model     = _train_prophet_model(model_key)
+    forecast  = _generate_forecast(model, model_key, periods=90)
+
     df = get_cleaned_train()
-    sub = df[df["category"] == category]
-    daily = _daily_from_trans(sub, df)
-    forecast = _run_prophet(daily, periods=90)
     cutoff = df["order_date"].max()
+
+    daily = _daily_from_trans(df[df["category"] == category], df)
     daily["month"] = daily["ds"].dt.to_period("M").dt.to_timestamp()
-    hist = daily.groupby("month")["y"].sum().reset_index().rename(columns={"month": "date", "y": "sales"})
+    hist = (
+        daily.groupby("month")["y"].sum()
+             .reset_index()
+             .rename(columns={"month": "date", "y": "sales"})
+    )
     _, fut = _monthly_split(forecast, cutoff)
     return hist, fut
 
+
 @st.cache_data(show_spinner="Running region forecast…")
-def get_prophet_region(region):
+def get_prophet_region(region: str):
+    """Return (hist_monthly_df, future_monthly_df) for a single region."""
+    model_key = f"reg:{region}"
+    model     = _train_prophet_model(model_key)
+    forecast  = _generate_forecast(model, model_key, periods=90)
+
     df = get_cleaned_train()
-    sub = df[df["region"] == region]
-    daily = _daily_from_trans(sub, df)
-    forecast = _run_prophet(daily, periods=90)
     cutoff = df["order_date"].max()
+
+    daily = _daily_from_trans(df[df["region"] == region], df)
     daily["month"] = daily["ds"].dt.to_period("M").dt.to_timestamp()
-    hist = daily.groupby("month")["y"].sum().reset_index().rename(columns={"month": "date", "y": "sales"})
+    hist = (
+        daily.groupby("month")["y"].sum()
+             .reset_index()
+             .rename(columns={"month": "date", "y": "sales"})
+    )
     _, fut = _monthly_split(forecast, cutoff)
     return hist, fut
+
 
 @st.cache_data(show_spinner="Computing anomaly detection…")
 def get_anomaly_data():
@@ -342,6 +457,9 @@ st.set_page_config(
     page_icon="📈", layout="wide", initial_sidebar_state="expanded",
 )
 inject_css()
+
+# Ensure CmdStan is available — runs once per process, cached as a resource.
+_cmdstan_ready = _ensure_cmdstan()
 
 # ── Sidebar navigation ─────────────────────────────────────────────────────────
 with st.sidebar:
@@ -589,8 +707,13 @@ elif PAGE == "🔮 Forecast Explorer":
     hr()
 
     section_header("Prophet Forecast — Interactive Chart with 95% Confidence Bands")
-    with st.spinner("Computing Prophet forecast (cached after first run)…"):
-        hist, fut = get_prophet_overall()
+    try:
+        with st.spinner("Computing Prophet forecast (cached after first run)…"):
+            hist, fut = get_prophet_overall()
+    except Exception as _prophet_exc:
+        st.error("⚠️ Prophet forecast model failed during this run.")
+        st.exception(_prophet_exc)
+        st.stop()
     monthly = get_monthly_sales()
 
     fig = go.Figure()
@@ -674,8 +797,13 @@ elif PAGE == "🗂️ Category Analysis":
     with c2: metric_card("Q1 2019 Forecast", f"${meta['q1_2019']:,.2f}", "Jan + Feb + Mar 2019")
     with c3: metric_card("Q4 2018 Actual", f"${meta['q4_2018']:,.2f}", "Holiday peak baseline")
 
-    with st.spinner(f"Computing {cat} forecast…"):
-        hist, fut = get_prophet_category(cat)
+    try:
+        with st.spinner(f"Computing {cat} forecast…"):
+            hist, fut = get_prophet_category(cat)
+    except Exception as _prophet_exc:
+        st.error(f"⚠️ Prophet category forecast failed for '{cat}'.")
+        st.exception(_prophet_exc)
+        st.stop()
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=hist["date"], y=hist["sales"], mode="lines", name="Historical Actual",
@@ -757,8 +885,13 @@ elif PAGE == "🗺️ Region Analysis":
     with c3: metric_card("Allocation Weight", f"{meta['alloc']:.2f}%", "Share of total Q1 demand")
     with c4: metric_card("Growth Rank", f"#{meta['rank']}", "Among 4 regions", positive=meta["rank"] <= 2)
 
-    with st.spinner(f"Computing {reg} forecast…"):
-        hist, fut = get_prophet_region(reg)
+    try:
+        with st.spinner(f"Computing {reg} forecast…"):
+            hist, fut = get_prophet_region(reg)
+    except Exception as _prophet_exc:
+        st.error(f"⚠️ Prophet region forecast failed for '{reg}'.")
+        st.exception(_prophet_exc)
+        st.stop()
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=hist["date"], y=hist["sales"], mode="lines", name="Historical Actual",
