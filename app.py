@@ -783,8 +783,8 @@ elif PAGE == "🔮 Forecast Explorer":
         y=pd.concat([fut["yhat_upper"], fut["yhat_lower"][::-1]]).tolist(),
         fill="toself", fillcolor="rgba(16,185,129,0.12)",
         line=dict(color="rgba(0,0,0,0)"), name="95% Confidence Interval", hoverinfo="skip"))
-    fig.add_vline(x="2018-12-31", line_dash="dot", line_color="#475569",
-                  annotation_text="Forecast Start →", annotation_font_color="#94a3b8")
+    fig.add_vline(x="2018-12-31", line_dash="dot", line_color="#475569")
+    fig.add_annotation(x="2018-12-31", y=0.95, yref="paper", text="Forecast Start →", showarrow=False, font=dict(color="#94a3b8"), xanchor="left")
     fig.update_layout(**PLOTLY_LAYOUT, title="Prophet — Full Historical + Q1 2019 Forecast",
                       yaxis_tickprefix="$", yaxis_tickformat=",.0f", height=450)
     col_c, col_d = st.columns([5, 1])
@@ -870,8 +870,8 @@ elif PAGE == "🗂️ Category Analysis":
         y=pd.concat([fut["yhat_upper"], fut["yhat_lower"][::-1]]).tolist(),
         fill="toself", fillcolor="rgba(16,185,129,0.12)", line=dict(color="rgba(0,0,0,0)"),
         name="95% Confidence Interval", hoverinfo="skip"))
-    fig.add_vline(x="2018-12-31", line_dash="dot", line_color="#475569",
-                  annotation_text="Forecast →", annotation_font_color="#94a3b8")
+    fig.add_vline(x="2018-12-31", line_dash="dot", line_color="#475569")
+    fig.add_annotation(x="2018-12-31", y=0.95, yref="paper", text="Forecast →", showarrow=False, font=dict(color="#94a3b8"), xanchor="left")
     fig.update_layout(**PLOTLY_LAYOUT, title=f"{cat} — Monthly Sales & Q1 2019 Forecast",
                       yaxis_tickprefix="$", yaxis_tickformat=",.0f", height=420)
     col_c, col_d = st.columns([5, 1])
@@ -958,8 +958,8 @@ elif PAGE == "🗺️ Region Analysis":
         y=pd.concat([fut["yhat_upper"], fut["yhat_lower"][::-1]]).tolist(),
         fill="toself", fillcolor="rgba(16,185,129,0.12)", line=dict(color="rgba(0,0,0,0)"),
         name="95% Confidence Interval", hoverinfo="skip"))
-    fig.add_vline(x="2018-12-31", line_dash="dot", line_color="#475569",
-                  annotation_text="Forecast →", annotation_font_color="#94a3b8")
+    fig.add_vline(x="2018-12-31", line_dash="dot", line_color="#475569")
+    fig.add_annotation(x="2018-12-31", y=0.95, yref="paper", text="Forecast →", showarrow=False, font=dict(color="#94a3b8"), xanchor="left")
     fig.update_layout(**PLOTLY_LAYOUT, title=f"{reg} Region — Monthly Sales & Q1 2019 Forecast",
                       yaxis_tickprefix="$", yaxis_tickformat=",.0f", height=420)
     col_c, col_d = st.columns([5, 1])
