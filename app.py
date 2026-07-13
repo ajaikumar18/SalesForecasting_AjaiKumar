@@ -10,6 +10,17 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
+# ── Thread-safety fix: limit OpenBLAS / OMP / MKL to 1 thread ────────────────
+# MUST be set BEFORE importing numpy, scipy, or scikit-learn.
+# Multi-threaded OpenBLAS is a known cause of SIGSEGV (segfault) on
+# Linux containers with limited resources (e.g. Streamlit Cloud free tier).
+os.environ.setdefault("OMP_NUM_THREADS",       "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS",   "1")
+os.environ.setdefault("MKL_NUM_THREADS",        "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS",    "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+# ─────────────────────────────────────────────────────────────────────────────
+
 import logging
 from pathlib import Path
 import io
@@ -18,13 +29,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-# Prophet and CmdStanPy are imported lazily inside their respective
-# cached functions to prevent native-library segfaults and OOM kills
-# during the Streamlit startup / health-check window.
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
+# Prophet, CmdStanPy, and scikit-learn are all imported lazily inside their
+# respective @st.cache functions.  This prevents native-library segfaults
+# and OOM kills during the Streamlit startup / health-check window.
 
 # ── Path setup ─────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parent
@@ -148,12 +155,18 @@ def warning_box(text):
 def success_box(text):
     st.markdown(f'<div class="success-box">✅ {text}</div>', unsafe_allow_html=True)
 
+
 def show_chart(filename, caption=""):
     path = CHARTS_DIR / filename
     if path.exists():
-        st.image(str(path), caption=caption, use_column_width=True)
+        try:
+            st.image(str(path), caption=caption, use_column_width=True)
+        except Exception:
+            st.info(f"📊 Chart loading… please refresh the page if this persists. (`{filename}`)")
     else:
-        st.warning(f"Chart not found: `{filename}`")
+        st.info(f"📊 Chart `{filename}` is not available in this deployment.")
+
+
 
 def download_csv(df, filename, label="⬇️ Download CSV"):
     st.download_button(label=label, data=df.to_csv(index=False).encode("utf-8"),
@@ -417,6 +430,9 @@ def get_prophet_region(region: str):
 
 @st.cache_data(show_spinner="Computing anomaly detection…")
 def get_anomaly_data():
+    # Lazy sklearn import — deferred to avoid C-runtime init at startup
+    from sklearn.ensemble import IsolationForest  # noqa: F401
+
     df = get_cleaned_train()
     wk = df.groupby(pd.Grouper(key="order_date", freq="W-MON"))["sales"].sum().reset_index().rename(columns={"order_date": "date"})
     wk["roll_mean"]   = wk["sales"].rolling(8, min_periods=4, center=True).mean()
@@ -427,7 +443,9 @@ def get_anomaly_data():
     wk["deviation"]   = wk["sales"] - wk["roll_median"]
     wk["month"]       = wk["date"].dt.month
     X = wk[["sales", "deviation", "month"]].values
-    wk["iforest_flag"] = IsolationForest(contamination=0.04, random_state=42, n_estimators=100).fit_predict(X) == -1
+    wk["iforest_flag"] = IsolationForest(
+        contamination=0.04, random_state=42, n_estimators=100, n_jobs=1
+    ).fit_predict(X) == -1
     wk["expected"] = wk["sales"].rolling(5, center=True, min_periods=1).median()
     wk["dev_pct"]  = ((wk["sales"] - wk["expected"]) / wk["expected"].replace(0, np.nan) * 100).round(1)
     wk["year"]     = wk["date"].dt.year
@@ -435,6 +453,11 @@ def get_anomaly_data():
 
 @st.cache_data(show_spinner="Computing product segmentation…")
 def get_segmentation_data():
+    # Lazy sklearn imports — deferred to avoid C-runtime init at startup
+    from sklearn.cluster import KMeans
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
     df = get_cleaned_train().copy()
     agg = df.groupby("sub-category").agg(
         total_sales=("sales", "sum"), purchase_frequency=("order_id", "nunique"), aov=("sales", "mean")
