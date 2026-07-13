@@ -804,12 +804,18 @@ elif PAGE == "🔮 Forecast Explorer":
     metrics_df = pd.DataFrame(MODEL_METRICS).T.reset_index().rename(columns={"index": "Model"})
     metrics_df.columns = ["Model", "RMSE ($)", "MAE ($)", "MAPE (%)", "R²", "Train Time (ms)", "Predict Time (ms)"]
     st.dataframe(
-        metrics_df.style
-            .highlight_min(subset=["RMSE ($)", "MAE ($)", "MAPE (%)", "Train Time (ms)", "Predict Time (ms)"], color="#0d3321", axis=0)
-            .highlight_max(subset=["R²"], color="#0d3321", axis=0)
-            .format({"RMSE ($)": "${:,.2f}", "MAE ($)": "${:,.2f}", "MAPE (%)": "{:.2f}%", "R²": "{:.4f}",
-                     "Train Time (ms)": "{:.1f}", "Predict Time (ms)": "{:.1f}"}),
-        use_container_width=True, hide_index=True)
+        metrics_df,
+        column_config={
+            "RMSE ($)": st.column_config.NumberColumn("RMSE ($)", format="$%,.2f"),
+            "MAE ($)": st.column_config.NumberColumn("MAE ($)", format="$%,.2f"),
+            "MAPE (%)": st.column_config.NumberColumn("MAPE (%)", format="%.2f%%"),
+            "R²": st.column_config.NumberColumn("R²", format="%.4f"),
+            "Train Time (ms)": st.column_config.NumberColumn("Train Time (ms)", format="%.1f"),
+            "Predict Time (ms)": st.column_config.NumberColumn("Predict Time (ms)", format="%.1f"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
     download_csv(metrics_df, "model_comparison_metrics.csv", "⬇️ Download Metrics (CSV)")
     hr()
 
@@ -906,10 +912,16 @@ elif PAGE == "🗂️ Category Analysis":
 
     section_header("YoY & QoQ Growth Matrix")
     st.dataframe(
-        compare_df.style.background_gradient(subset=["YoY Growth (%)"], cmap="Blues")
-                   .format({"Q1 2018 Actual": "${:,.2f}", "Q4 2018 Actual": "${:,.2f}",
-                             "Q1 2019 Forecast": "${:,.2f}", "YoY Growth (%)": "+{:.2f}%"}),
-        use_container_width=True, hide_index=True)
+        compare_df,
+        column_config={
+            "Q1 2018 Actual": st.column_config.NumberColumn("Q1 2018 Actual", format="$%,.2f"),
+            "Q4 2018 Actual": st.column_config.NumberColumn("Q4 2018 Actual", format="$%,.2f"),
+            "Q1 2019 Forecast": st.column_config.NumberColumn("Q1 2019 Forecast", format="$%,.2f"),
+            "YoY Growth (%)": st.column_config.NumberColumn("YoY Growth (%)", format="+%.2f%%"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
     download_csv(compare_df, "category_growth_comparison.csv", "⬇️ Download Growth Table (CSV)")
 
 
@@ -996,12 +1008,18 @@ elif PAGE == "🗺️ Region Analysis":
                                "Allocation Weight (%)": m["alloc"], "YoY Rank": m["rank"]}
                               for r, m in REGION_META.items()]).sort_values("YoY Rank")
     st.dataframe(
-        table_df.style.background_gradient(subset=["YoY Growth (%)"], cmap="RdYlGn")
-                      .background_gradient(subset=["Allocation Weight (%)"], cmap="Blues")
-                      .format({"Q1 2018 Actual": "${:,.2f}", "Q4 2018 Actual": "${:,.2f}",
-                                "Q1 2019 Forecast": "${:,.2f}", "YoY Growth (%)": "{:+.2f}%",
-                                "Allocation Weight (%)": "{:.2f}%"}),
-        use_container_width=True, hide_index=True)
+        table_df,
+        column_config={
+            "Q1 2018 Actual": st.column_config.NumberColumn("Q1 2018 Actual", format="$%,.2f"),
+            "Q4 2018 Actual": st.column_config.NumberColumn("Q4 2018 Actual", format="$%,.2f"),
+            "Q1 2019 Forecast": st.column_config.NumberColumn("Q1 2019 Forecast", format="$%,.2f"),
+            "YoY Growth (%)": st.column_config.NumberColumn("YoY Growth (%)", format="+%.2f%%"),
+            "Allocation Weight (%)": st.column_config.NumberColumn("Allocation Weight (%)", format="%.2f%%"),
+            "YoY Rank": st.column_config.NumberColumn("YoY Rank", format="%d"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
     download_csv(table_df, "region_growth_allocation.csv", "⬇️ Download Allocation Matrix (CSV)")
 
 
