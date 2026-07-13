@@ -289,9 +289,23 @@ def _train_prophet_model(model_key: str):
       "cat:<category>"   — per-category model
       "reg:<region>"     — per-region model
 
+    CmdStan is installed here (lazily, once) so that the Streamlit health-check
+    endpoint is never blocked at app startup.
     The Prophet object is stored in the resource cache and reused on every
     subsequent page navigation without retraining.
     """
+    # ── Ensure CmdStan is available before calling Prophet ──────────────────
+    # _ensure_cmdstan() is itself @st.cache_resource, so the install/check
+    # runs exactly once per process lifetime regardless of how many models
+    # are trained.
+    cmdstan_ok = _ensure_cmdstan()
+    if not cmdstan_ok:
+        raise RuntimeError(
+            "CmdStan could not be installed on this deployment. "
+            "Prophet model training is unavailable. "
+            "Check the app logs for the exact installation error."
+        )
+
     df = get_cleaned_train()
 
     if model_key == "overall":
@@ -466,8 +480,9 @@ st.set_page_config(
 )
 inject_css()
 
-# Ensure CmdStan is available — runs once per process, cached as a resource.
-_cmdstan_ready = _ensure_cmdstan()
+# NOTE: CmdStan is installed lazily — see _train_prophet_model() — so that
+# the Streamlit health-check endpoint starts responding immediately and is
+# not blocked by a multi-minute CmdStan download/compilation.
 
 # ── Sidebar navigation ─────────────────────────────────────────────────────────
 with st.sidebar:
