@@ -197,10 +197,23 @@ def get_region_monthly():
 @st.cache_data(show_spinner="Training Prophet model...")
 def _run_prophet(daily_df, periods=90):
     """Fit Prophet on a ds/y DataFrame — returns the full forecast."""
-    m = Prophet(changepoint_prior_scale=0.01, seasonality_prior_scale=10.0,
-                yearly_seasonality=True, weekly_seasonality=True, daily_seasonality=False)
+
+    m = Prophet(
+        changepoint_prior_scale=0.01,
+        seasonality_prior_scale=10.0,
+        yearly_seasonality=True,
+        weekly_seasonality=True,
+        daily_seasonality=False,
+        stan_backend="CMDSTANPY"
+    )
+
     m.fit(daily_df)
-    future = m.make_future_dataframe(periods=periods, freq="D")
+
+    future = m.make_future_dataframe(
+        periods=periods,
+        freq="D"
+    )
+
     return m.predict(future)
 
 def _daily_from_trans(df_sub, df_all):
