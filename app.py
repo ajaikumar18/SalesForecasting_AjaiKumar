@@ -731,6 +731,8 @@ elif PAGE == "📊 Sales Dashboard":
     search = st.text_input("🔍 Search product name", placeholder="e.g. 'Chair', 'Phone'…")
     display_df = df[["order_date", "category", "sub-category", "region", "segment",
                       "ship_mode", "sales", "shipping_delay", "product_name"]].copy()
+    for col in ["category", "sub-category", "region", "segment", "ship_mode", "product_name"]:
+        display_df[col] = display_df[col].astype(str)
     if search:
         display_df = display_df[display_df["product_name"].str.contains(search, case=False, na=False)]
     st.caption(f"Showing {len(display_df):,} rows")
