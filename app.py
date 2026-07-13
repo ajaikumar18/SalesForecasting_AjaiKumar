@@ -6,6 +6,9 @@
 # This file is fully self-contained — no external module imports needed.
 # All data is loaded directly from train.csv in the same directory.
 
+import faulthandler
+faulthandler.enable()
+
 import warnings
 warnings.filterwarnings("ignore")
 
