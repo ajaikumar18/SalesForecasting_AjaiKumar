@@ -150,7 +150,7 @@ def success_box(text):
 def show_chart(filename, caption=""):
     path = CHARTS_DIR / filename
     if path.exists():
-        st.image(str(path), caption=caption, use_container_width=True)
+        st.image(str(path), caption=caption, use_column_width=True)
     else:
         st.warning(f"Chart not found: `{filename}`")
 
@@ -174,19 +174,27 @@ def _ensure_cmdstan():
     Installs CmdStan into a writable cache directory if it is not already
     available.  On Streamlit Cloud this runs exactly once per deployment;
     the result is held in the resource cache for the lifetime of the process.
-    Returns True on success, False on failure (caller checks the flag).
+    Returns True on success, False on failure (caller shows error message).
+
+    NOTE: cmdstanpy.cmdstan_path() RAISES an exception (not returns None/False)
+    when CmdStan is not found. The nested try/except handles this correctly:
+      - inner try  → if cmdstan_path() succeeds, CmdStan is already present
+      - inner except → CmdStan is missing, so install it
     """
+    logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
     try:
         import cmdstanpy
-        # Silence CmdStanPy's own logger during installation
-        logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
-        # Only install if CmdStan is not already present
-        if not cmdstanpy.cmdstan_path():
+        try:
+            cmdstanpy.cmdstan_path()   # raises if not installed
+            # Already present — nothing to do
+            return True
+        except Exception:
+            # CmdStan is not installed — install it now
             cmdstanpy.install_cmdstan(overwrite=False, verbose=False)
-        return True
+            return True
     except Exception as exc:
-        # Non-fatal — app continues without Prophet if CmdStan unavailable
-        logging.warning(f"CmdStan installation skipped: {exc}")
+        # Non-fatal — Prophet pages will show a clear error via try/except
+        logging.warning(f"CmdStan installation failed: {exc}")
         return False
 
 
