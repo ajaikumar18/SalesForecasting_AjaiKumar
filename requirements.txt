@@ -3,25 +3,22 @@
 # To install: pip install -r requirements.txt
 # Tested on Python 3.11 (use runtime.txt to pin on Streamlit Cloud)
 #
-# NOTE: CmdStan is installed automatically at app startup via
-#       cmdstanpy.install_cmdstan() wrapped in @st.cache_resource.
-#       System build tools (gcc, make) are listed in packages.txt.
+# NOTE: Prophet and CmdStanPy are imported lazily inside app.py to prevent
+#       native-library segfaults at startup. CmdStan is auto-installed on
+#       first Prophet page visit via cmdstanpy.install_cmdstan().
+#       System build tools (gcc) are listed in packages.txt.
 
 # ── Core data manipulation ──────────────────────────────────────────────────────
 pandas==2.2.2
 numpy==1.26.4
 
 # ── Visualisation ───────────────────────────────────────────────────────────────
-matplotlib==3.9.0
-seaborn==0.13.2
 plotly==5.22.0
 
 # ── Machine Learning ────────────────────────────────────────────────────────────
 scikit-learn==1.5.0
-xgboost==2.0.3
 
 # ── Time Series & Forecasting ───────────────────────────────────────────────────
-statsmodels==0.14.2
 prophet==1.1.5
 cmdstanpy==1.3.0
 
@@ -34,7 +31,7 @@ streamlit==1.35.0
 # ── PDF report generation ───────────────────────────────────────────────────────
 fpdf2==2.7.9
 
-# ── Scientific computing ────────────────────────────────────────────────────────
+# ── Scientific computing (required by scikit-learn and prophet) ─────────────────
 scipy==1.13.1
 
 # ── File I/O ────────────────────────────────────────────────────────────────────

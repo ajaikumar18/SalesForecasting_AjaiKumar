@@ -12,14 +12,15 @@ warnings.filterwarnings("ignore")
 import os
 import logging
 from pathlib import Path
-import cmdstanpy
 import io
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from prophet import Prophet
+# Prophet and CmdStanPy are imported lazily inside their respective
+# cached functions to prevent native-library segfaults and OOM kills
+# during the Streamlit startup / health-check window.
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
@@ -289,11 +290,16 @@ def _train_prophet_model(model_key: str):
       "cat:<category>"   — per-category model
       "reg:<region>"     — per-region model
 
-    CmdStan is installed here (lazily, once) so that the Streamlit health-check
-    endpoint is never blocked at app startup.
+    CmdStan and Prophet are imported HERE (lazily) so they never touch
+    the process at startup — avoiding native-library segfaults and OOM
+    kills before the health-check endpoint is ready.
     The Prophet object is stored in the resource cache and reused on every
     subsequent page navigation without retraining.
     """
+    # ── Lazy imports — only executed when a Prophet page is first visited ──
+    import cmdstanpy as _cmdstanpy          # noqa: F401 (needed for Prophet)
+    from prophet import Prophet             # noqa: F811
+
     # ── Ensure CmdStan is available before calling Prophet ──────────────────
     # _ensure_cmdstan() is itself @st.cache_resource, so the install/check
     # runs exactly once per process lifetime regardless of how many models
