@@ -194,7 +194,7 @@ def get_region_monthly():
     df["month_start"] = df["order_date"].dt.to_period("M").dt.to_timestamp()
     return df.groupby(["month_start", "region"])["sales"].sum().reset_index().rename(columns={"month_start": "date"})
 
-
+@st.cache_data(show_spinner="Training Prophet model...")
 def _run_prophet(daily_df, periods=90):
     """Fit Prophet on a ds/y DataFrame — returns the full forecast."""
     m = Prophet(changepoint_prior_scale=0.01, seasonality_prior_scale=10.0,
@@ -221,11 +221,18 @@ def _monthly_split(forecast, cutoff):
 def get_prophet_overall():
     df = get_cleaned_train()
     daily = _daily_from_trans(df, df)
+
+    st.write("Starting Prophet")   # ADD HERE
+
     forecast = _run_prophet(daily, periods=90)
+
+    st.write("Prophet completed")  # ADD HERE
+
     cutoff = df["order_date"].max()
     daily["month"] = daily["ds"].dt.to_period("M").dt.to_timestamp()
     hist = daily.groupby("month")["y"].sum().reset_index().rename(columns={"month": "date", "y": "sales"})
     _, fut = _monthly_split(forecast, cutoff)
+
     return hist, fut
 
 @st.cache_data(show_spinner="Running category forecast…")
