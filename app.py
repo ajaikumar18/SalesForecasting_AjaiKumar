@@ -199,12 +199,14 @@ def _ensure_cmdstan():
     try:
         import cmdstanpy
         try:
-            cmdstanpy.cmdstan_path()   # raises if not installed
-            # Already present — nothing to do
+            path = cmdstanpy.cmdstan_path()   # raises if not installed
+            os.environ["CMDSTAN"] = path
             return True
         except Exception:
             # CmdStan is not installed — install it now
             cmdstanpy.install_cmdstan(overwrite=False, verbose=False)
+            path = cmdstanpy.cmdstan_path()
+            os.environ["CMDSTAN"] = path
             return True
     except Exception as exc:
         # Non-fatal — Prophet pages will show a clear error via try/except
@@ -309,11 +311,7 @@ def _train_prophet_model(model_key: str):
     The Prophet object is stored in the resource cache and reused on every
     subsequent page navigation without retraining.
     """
-    # ── Lazy imports — only executed when a Prophet page is first visited ──
-    import cmdstanpy as _cmdstanpy          # noqa: F401 (needed for Prophet)
-    from prophet import Prophet             # noqa: F811
-
-    # ── Ensure CmdStan is available before calling Prophet ──────────────────
+    # ── Ensure CmdStan is available before importing/calling Prophet ────────
     # _ensure_cmdstan() is itself @st.cache_resource, so the install/check
     # runs exactly once per process lifetime regardless of how many models
     # are trained.
@@ -324,6 +322,11 @@ def _train_prophet_model(model_key: str):
             "Prophet model training is unavailable. "
             "Check the app logs for the exact installation error."
         )
+
+    # ── Lazy imports — executed ONLY after CmdStan is guaranteed to be present ──
+    import cmdstanpy as _cmdstanpy          # noqa: F401 (needed for Prophet)
+    from prophet import Prophet             # noqa: F811
+
 
     df = get_cleaned_train()
 
